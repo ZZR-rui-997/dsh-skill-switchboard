@@ -56,6 +56,10 @@ they are read-only and belong to their package.
   destroying it; the Trash view restores it.
 - **Sediment** — append a dated entry to the skill's "经验附注 / notes" section; you can also ask
   the current session's agent to draft that note.
+- **Usage stats** — each row shows how many times the skill was **really loaded** and when it was
+  last used (`⚡3 · 2d ago`), with a "Used" filter for the frequently loaded ones. Counts come from
+  local session events (real skill loads and tool calls, **subagents excluded**) and keep at most
+  300 entries.
 - **Version check** — compares the skill's `metadata.version` with the GitHub repository it names
   (only when you press the button).
 - **Batch mode** — select several skills and enable or disable them at once.
@@ -69,7 +73,8 @@ they are read-only and belong to their package.
   the trash keeps at most 100 entries.
 - Delete and move refuse junction/symlink roots, so a linked skill cannot be unlinked by accident.
 - Built-in and plugin-provided skills are read-only: they are not listed and cannot be toggled.
-- Network access happens only for the optional version check, against `api.github.com`.
+- Network access happens only for the optional version check, against `api.github.com`; usage
+  stats are a local file (`~/.dsh/skills-panel/usage.json`) and never leave the machine.
 - Windows is the tested platform; the code avoids shell calls and uses `node:` builtins only.
 - Requires DSH ≥ 0.2.2-rc.1 and Node ≥ 22.
 

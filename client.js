@@ -65,6 +65,8 @@
     'panel.chip.issues': '有规范问题',
     'panel.chip.linked': '链接技能',
     'panel.tokenHint': '按字符数估算的 token 量（≈字节÷2.5，仅参考）',
+    'panel.usageHint': '技能被真实加载的次数与最近使用时间（本机会话事件统计，不含子智能体）',
+    'panel.chip.used': '常用',
     'panel.trashTitle': '回收站',
     'panel.move': '移动',
     'panel.moveTitle': '移动技能「{name}」',
@@ -97,6 +99,7 @@
     'panel.versionUpToDate': '已是最新（远端 v{remote}）',
     'panel.versionNew': '发现新版本 v{remote}（本地 v{local}）',
     'panel.versionFail': '检查失败：{msg}',
+    'panel.versionNoRelease': '仓库 {repo} 还没有发布（GitHub repo 尚未初始化或无 release）',
     'panel.versionRepoPrompt': '输入 GitHub 仓库（owner/repo），留空取消：',
     'meta.title': '技能面板',
     'meta.description': '在侧栏管理自己安装的技能：开关、编辑、规范检查、导入导出。',
@@ -159,6 +162,8 @@
     'panel.chip.issues': 'Spec issues',
     'panel.chip.linked': 'Linked',
     'panel.tokenHint': 'Rough token estimate from bytes (≈bytes÷2.5)',
+    'panel.usageHint': 'Real skill-load count & last used (local session-event stats, subagents excluded)',
+    'panel.chip.used': 'Used',
     'panel.trashTitle': 'Trash',
     'panel.move': 'Move',
     'panel.moveTitle': 'Move skill "{name}"',
@@ -191,6 +196,7 @@
     'panel.versionUpToDate': 'Up to date (remote v{remote})',
     'panel.versionNew': 'New version v{remote} available (local v{local})',
     'panel.versionFail': 'Check failed: {msg}',
+    'panel.versionNoRelease': 'Repo {repo} has no release yet (GitHub repo not initialized or no release published)',
     'panel.versionRepoPrompt': 'GitHub repo (owner/repo); empty cancels:',
     'meta.title': 'Skills panel',
     'meta.description': 'Manage your own skills in the sidebar: toggle, edit, spec-check, import.',
@@ -416,6 +422,10 @@
           return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         }
 
+          function usageAgo(iso) {
+            const ms = iso ? new Date(iso).getTime() : NaN;
+            return Number.isFinite(ms) ? ' · ' + relTime(ms) : '';
+          }
         function Row(props) {
           const { row, busy, checkState, onToggle, onEdit, onDelete, onOpenFolder, onCheck, onFix, onSediment, query, onTags, onMove, selectMode, selected, onSelect } = props;
           const enabled = row.modelInvocable && row.userInvocable;
@@ -434,6 +444,7 @@
                 h('span', { className: 'sp-src', title: row.path || '' }, row.source || ''),
                 typeof row.mtimeMs === 'number' ? h('span', { className: 'sp-meta', title: new Date(row.mtimeMs).toLocaleString() }, relTime(row.mtimeMs)) : null,
                 typeof row.bytes === 'number' ? h('span', { className: 'sp-meta', title: t('panel.tokenHint') }, '≈' + Math.max(1, Math.round(row.bytes / 2.5)) + ' tok') : null,
+                (row.usage && row.usage.count > 0) ? h('span', { className: 'sp-meta', title: t('panel.usageHint') }, '⚡' + row.usage.count + usageAgo(row.usage.lastUsed)) : null,
               ),
               h('div', { className: 'sp-desc' },
                 h(HighlightText, { text: row.description || row.whenToUse || '', query })),
@@ -807,6 +818,7 @@
             if (chip === 'off' && (r.modelInvocable && r.userInvocable)) return false;
             if (chip === 'issues' && !hasIssue(r)) return false;
             if (chip === 'linked' && !r.linked) return false;
+            if (chip === 'used' && !(r.usage && r.usage.count > 0)) return false;
             if (!q) return true;
             return (r.name || '').toLowerCase().includes(q)
               || (r.description || '').toLowerCase().includes(q)
@@ -868,7 +880,7 @@
           const [sedimentRow, setSedimentRow] = React.useState(null);
           const [createOpen, setCreateOpen] = React.useState(false);
           const [importOpen, setImportOpen] = React.useState(false);
-          const [chip, setChip] = React.useState('all'); // all | on | off | issues | linked
+          const [chip, setChip] = React.useState('all'); // all | on | off | issues | linked | used
           const [trashOpen, setTrashOpen] = React.useState(false);
           const [trashItems, setTrashItems] = React.useState(null); // null = not loaded
           const [trashBusy, setTrashBusy] = React.useState(null);
@@ -1040,18 +1052,11 @@
             try {
               const sessionId = pickSessionId();
               if (!sessionId) throw new Error('没有可用会话');
-              let cfg = await executeCommand(sessionId, 'skills-panel-version', {});
-              let repo = cfg.repo;
-              if (!repo) {
-                repo = window.prompt(t('panel.versionRepoPrompt')) || '';
-                if (!repo.trim()) { setVersionBusy(false); return; }
-                cfg = await executeCommand(sessionId, 'skills-panel-version', { repo: repo.trim() });
-                repo = cfg.repo;
-              }
-              const resp = await window.fetch('https://api.github.com/repos/' + repo + '/releases/latest', { headers: { Accept: 'application/vnd.github+json' } });
-              if (!resp.ok) throw new Error('HTTP ' + resp.status);
-              const data = await resp.json();
-              const remoteV = String(data.tag_name || '').replace(/^v/, '');
+              // Network happens HOST-side (check:true → node:https): the webview
+              // renderer cannot fetch api.github.com ('Failed to fetch').
+              const cfg = await executeCommand(sessionId, 'skills-panel-version', { check: true });
+              if (cfg.noRelease) throw new Error(t('panel.versionNoRelease', { repo: cfg.repo }));
+              const remoteV = cfg.remote;
               const localV = cfg.version || '0';
               const isNew = cmpVer(remoteV, localV) > 0;
               setVersionMsg(isNew ? t('panel.versionNew', { remote: remoteV, local: localV }) : t('panel.versionUpToDate', { remote: remoteV }));
@@ -1069,6 +1074,7 @@
               if (!(c && c.issues && c.issues.length)) return false;
             }
             if (chipForCount === 'linked' && !r.linked) return false;
+            if (chipForCount === 'used' && !(r.usage && r.usage.count > 0)) return false;
             const q = (query || '').toLowerCase().trim();
             if (!q) return true;
             return (r.name || '').toLowerCase().includes(q)
@@ -1091,7 +1097,7 @@
                 onChange: (e) => setQuery(e.target.value),
               })),
             h('div', { className: 'sp-chips' },
-              [['all', t('panel.chip.all')], ['on', t('panel.chip.on')], ['off', t('panel.chip.off')], ['issues', t('panel.chip.issues')], ['linked', t('panel.chip.linked')]].map(([k, label]) =>
+              [['all', t('panel.chip.all')], ['on', t('panel.chip.on')], ['off', t('panel.chip.off')], ['issues', t('panel.chip.issues')], ['linked', t('panel.chip.linked')], ['used', t('panel.chip.used')]].map(([k, label]) =>
                 h('button', {
                   key: k,
                   className: 'sp-chip' + (chip === k ? ' active' : ''),

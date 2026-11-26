@@ -18,6 +18,7 @@ import { mkdtempSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { homedir, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
+import { request as httpsGet } from 'node:https';
 
 const NS = 'dsh-skill-switchboard';
 
@@ -27,7 +28,12 @@ const MAX_BODY_CHARS = 20000;   // full-text search payload cap per skill
 const MAX_EDIT_BYTES = 2 * 1024 * 1024; // editor save cap (mirrors yanglaofish 2MB)
 
 // ---------- panel data (groups.json tags) + self version (batch2) ----------
-const PANEL_DIR = () => join(homedir(), '.dsh', 'skills-panel');
+// Sandbox-aware too: when SP_TEST_ROOTS is set, panel data (groups.json /
+// config.json / usage.json) lives in the sandbox instead of the real home.
+const PANEL_DIR = () => {
+  const testRoot = (process.env.SP_TEST_ROOTS || '').split('|').map((s) => s.trim()).filter(Boolean)[0];
+  return testRoot ? join(testRoot, '_panel-data') : join(homedir(), '.dsh', 'skills-panel');
+};
 
 // Sandbox-aware default target root: when SP_TEST_ROOTS is set (test mode), writes
 // must never fall back to the real user skills root (see docs/BUG-2026-11-25-e2e-pollutes-user-skills.md).
@@ -59,6 +65,97 @@ function sanitizeTags(list) {
     if (seen.length >= 12) break;
   }
   return seen;
+}
+// ---------- usage recorder (usage.json; driven by session/event) ----------
+// Counts REAL skill loads (user/message with source.kind === 'skill-invocation',
+// emitted by dsh-tool-skill) and tool calls (tool/call events) across all
+// sessions. Subagent sessions are skipped. In-memory source of truth with a
+// debounced flush to PANEL_DIR/usage.json so list always sees fresh counts.
+let usageMem = null;
+let usageTimer = null;
+const USAGE_KEEP = 300;
+function emptyUsage() { return { skills: {}, tools: {} }; }
+function loadUsage() {
+  if (usageMem) return usageMem;
+  try {
+    const raw = readFileSync(join(PANEL_DIR(), 'usage.json'), 'utf8');
+    const data = JSON.parse(raw);
+    usageMem = (data && typeof data === 'object' && !Array.isArray(data)
+      && data.skills && typeof data.skills === 'object' && !Array.isArray(data.skills)
+      && data.tools && typeof data.tools === 'object' && !Array.isArray(data.tools))
+      ? { skills: data.skills, tools: data.tools }
+      : emptyUsage();
+    // Normalize entries: a hand-edited usage.json with primitive values must not
+    // poison touchUsage (`cur.count += 1` on a primitive throws in strict ESM and
+    // the catch would silently stop counting that skill forever).
+    for (const key of ['skills', 'tools']) {
+      for (const name of Object.keys(usageMem[key])) {
+        const e = usageMem[key][name];
+        if (!e || typeof e !== 'object' || Array.isArray(e) || typeof e.count !== 'number' || !Number.isFinite(e.count)) {
+          usageMem[key][name] = { count: 0, lastUsed: (e && typeof e === 'object' && typeof e.lastUsed === 'string') ? e.lastUsed : undefined };
+        }
+      }
+    }
+  } catch { usageMem = emptyUsage(); }
+  return usageMem;
+}
+function pruneUsage(u) {
+  for (const key of ['skills', 'tools']) {
+    const bucket = u[key];
+    const names = Object.keys(bucket);
+    if (names.length <= USAGE_KEEP) continue;
+    names.sort((a, b) => String((bucket[b] && bucket[b].lastUsed) || '').localeCompare(String((bucket[a] && bucket[a].lastUsed) || ''))); // ISO strings: lexicographic == chronological (equal-length); plain compare would be equivalent — kept as-is.
+    for (const name of names.slice(USAGE_KEEP)) delete bucket[name];
+  }
+}
+function saveUsage() {
+  try {
+    if (!usageMem) return;
+    pruneUsage(usageMem);
+    usageMem.updatedAt = new Date().toISOString();
+    mkdirSync(PANEL_DIR(), { recursive: true });
+    writeFileSync(join(PANEL_DIR(), 'usage.json'), JSON.stringify(usageMem), 'utf8');
+  } catch { /* stats are best-effort */ }
+}
+function scheduleUsageFlush() {
+  if (usageTimer) return;
+  usageTimer = setTimeout(() => { usageTimer = null; saveUsage(); }, 3000);
+  if (usageTimer && typeof usageTimer.unref === 'function') usageTimer.unref();
+}
+function touchUsage(kind, name) {
+  const u = loadUsage();
+  const bucket = u[kind] || (u[kind] = {});
+  const cur = bucket[name] || (bucket[name] = { count: 0 });
+  cur.count += 1;
+  cur.lastUsed = new Date().toISOString();
+  scheduleUsageFlush();
+}
+function recordSessionEvent(session, event) {
+  try {
+    if (!event || typeof event !== 'object' || !event.type) return;
+    // skip subagent sessions (same rule as 灵枢 hooks.js isSubagentSession)
+    const header = session && session.header;
+    if (header && (header.origin === 'subagent'
+      || (Number.isFinite(header.delegationDepth) && header.delegationDepth > 0))) return;
+    if (event.type === 'user/message') {
+      const src = event.data && event.data.source;
+      if (src && src.kind === 'skill-invocation' && typeof src.name === 'string' && src.name) {
+        touchUsage('skills', src.name);
+      }
+    } else if (event.type === 'tool/call') {
+      const name = event.data && event.data.name;
+      if (typeof name === 'string' && name) touchUsage('tools', name);
+    }
+  } catch { /* never break the session event flow */ }
+}
+function handleUsage(ctx, invocation) {
+  const payload = parsePayload(invocation.rawInput);
+  if (payload && payload.reset === true) {
+    usageMem = emptyUsage();
+    saveUsage();
+    return { kind: 'success', text: JSON.stringify({ ok: true, reset: true, usage: usageMem }) };
+  }
+  return { kind: 'success', text: JSON.stringify({ ok: true, usage: loadUsage() }) };
 }
 function versionOfSelf() {
   try {
@@ -428,6 +525,11 @@ async function handleList(ctx, invocation) {
   rows = filterUserOwned(rows, cwd);
   const groupsData = loadGroups();
   for (const r of rows) r.tags = sanitizeTags(groupsData.tags[r.name] || []);
+  const usageData = loadUsage();
+  for (const r of rows) {
+    const u = usageData.skills[r.name];
+    if (u && typeof u.count === 'number' && u.count > 0) r.usage = { count: u.count, lastUsed: u.lastUsed };
+  }
   rows.sort((a, b) => a.name.localeCompare(b.name));
   // 下发候选根目录，客户端（新建/归档对话框）据此渲染根选择器，不再硬编码本机路径。
   const roots = userRootList();
@@ -440,7 +542,9 @@ async function handleList(ctx, invocation) {
 // so the engine/panel never mistake backups for skills). Flat dir, filename carries the
 // timestamp + originating root hash + skill name; capped by pruneBackups.
 function backupRoot() {
-  return join(homedir(), '.dsh', 'skills-panel-backups');
+  // Sandbox-aware: under SP_TEST_ROOTS backups land in the sandbox, never the real home.
+  const testRoot = (process.env.SP_TEST_ROOTS || '').split('|').map((s) => s.trim()).filter(Boolean)[0];
+  return testRoot ? join(testRoot, '_panel-backups') : join(homedir(), '.dsh', 'skills-panel-backups');
 }
 
 const BACKUP_CAP = 100;
@@ -943,7 +1047,10 @@ function rootTag(root) {
 }
 
 function trashDirOf(root) {
-  return join(homedir(), '.dsh', 'skills-panel-trash', rootTag(root));
+  // Sandbox-aware: under SP_TEST_ROOTS the trash lands in the sandbox.
+  const testRoot = (process.env.SP_TEST_ROOTS || '').split('|').map((s) => s.trim()).filter(Boolean)[0];
+  const base = testRoot ? join(testRoot, '_panel-trash') : join(homedir(), '.dsh', 'skills-panel-trash');
+  return join(base, rootTag(root));
 }
 
 function pruneTrash(trashRoot) {
@@ -996,10 +1103,13 @@ async function handleRestore(ctx, invocation) {
   const payload = parsePayload(invocation.rawInput);
   const trashPath = typeof payload.trashPath === 'string' ? payload.trashPath : '';
   if (!trashPath) throw new Error('trashPath 缺失');
-  // Trash item must live inside a managed trash dir (~/.dsh/skills-panel-trash/<rootName>).
+  // Trash item must live inside a managed trash dir (~/.dsh/skills-panel-trash/<rootName>
+  // or sandbox _panel-trash/<rootName> under SP_TEST_ROOTS). Compute the central base the
+  // same way trashDirOf does so tests can restore items inside the sandbox.
   let root = null;
   const canon = canonUserPath(trashPath);
-  const central = canonUserPath(join(homedir(), '.dsh', 'skills-panel-trash'));
+  const testRoot = (process.env.SP_TEST_ROOTS || '').split('|').map((s) => s.trim()).filter(Boolean)[0];
+  const central = canonUserPath(testRoot ? join(testRoot, '_panel-trash') : join(homedir(), '.dsh', 'skills-panel-trash'));
   if (canon && central && canon.startsWith(central)) {
     for (const r of userRootList()) {
       if (canonUserPath(dirname(trashPath)) === canonUserPath(trashDirOf(r))) { root = r; break; }
@@ -1083,16 +1193,19 @@ async function handleArchive(ctx, invocation) {
   const dir = dirname(file);
   if (!existsSync(dir)) throw new Error('目录不存在: ' + dir);
   if (isJunctionOrSymlink(dir)) throw new Error('链接技能不支持归档（会影响源目录），请手动处理');
+  // Sandbox-aware: under SP_TEST_ROOTS the archive lives in the sandbox, never the real home.
+  const testRoot = (process.env.SP_TEST_ROOTS || '').split('|').map((s) => s.trim()).filter(Boolean)[0];
   const home = homedir();
-  const archiveRoot = join(home, '.dsh', 'skills-archive', group);
+  const archiveRoot = testRoot ? join(testRoot, '_panel-archive', group) : join(home, '.dsh', 'skills-archive', group);
   if (restore) {
     // Gate (R1): restore source must live inside the managed archive root — never
     // rename arbitrary disk directories into the scanned skills root.
     const dirReal = canonUserPath(dir);
-    if (!dirReal.startsWith(canonUserPath(join(home, '.dsh', 'skills-archive')))) {
+    const archiveBase = testRoot ? canonUserPath(join(testRoot, '_panel-archive')) : canonUserPath(join(home, '.dsh', 'skills-archive'));
+    if (!dirReal || !archiveBase || !dirReal.startsWith(archiveBase)) {
       throw new Error('恢复来源必须位于技能归档目录内（~/.dsh/skills-archive）');
     }
-    const destRoot = join(home, '.dsh', 'skills');
+    const destRoot = testRoot ? join(testRoot, 'skills') : join(home, '.dsh', 'skills');
     const dest = join(destRoot, basename(dir));
     if (existsSync(dest)) throw new Error('目标已存在，无法恢复: ' + dest);
     mkdirSync(destRoot, { recursive: true });
@@ -1222,7 +1335,63 @@ async function handleVersion(ctx, invocation) {
     mkdirSync(cfgDir, { recursive: true });
     writeFileSync(cfgFile, JSON.stringify(cfg, null, 2), 'utf8');
   }
+  // payload.check === true → do the GitHub lookup HERE (host process). The webview
+  // renderer cannot fetch api.github.com (cross-origin refused → 'Failed to fetch'),
+  // so the client delegates network to us via node:https.
+  if (payload.check === true) {
+    const repo = cfg.checkRepo || 'ZZR-rui-997/dsh-skill-switchboard';
+    const localV = versionOfSelf();
+    const latest = await fetchLatestRelease(repo);
+    if (latest == null) {
+      return { kind: 'success', text: JSON.stringify({ ok: true, repo, version: localV, noRelease: true }) };
+    }
+    return { kind: 'success', text: JSON.stringify({ ok: true, repo, version: localV, remote: latest }) };
+  }
   return { kind: 'success', text: JSON.stringify({ ok: true, repo: cfg.checkRepo || '', version: versionOfSelf() }) };
+}
+
+// Remote version via api.github.com contents endpoint (package.json on main).
+// Uses maxVersion TLSv1.2: this network resets TLS1.3 ClientHellos to api.github.com
+// (ECONNRESET), while TLS1.2 passes. Returns version string, or null on 404
+// (repo absent), throws on other errors.
+function fetchLatestReleaseOnce(repo) {
+  return new Promise((resolve, reject) => {
+    const req = httpsGet({
+      hostname: 'api.github.com',
+      path: '/repos/' + repo + '/contents/package.json?ref=main',
+      maxVersion: 'TLSv1.2',
+      headers: {
+        'User-Agent': 'dsh-skill-switchboard',
+        Accept: 'application/vnd.github+json',
+      },
+      timeout: 10000,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const body = Buffer.concat(chunks).toString('utf8');
+        if (res.statusCode === 404) { resolve(null); return; }
+        if (res.statusCode !== 200) { reject(new Error('HTTP ' + res.statusCode)); return; }
+        try {
+          const data = JSON.parse(body);
+          const decoded = Buffer.from(String(data.content || ''), 'base64').toString('utf8');
+          resolve(String(JSON.parse(decoded).version || '') || null);
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('timeout')); });
+    req.end();
+  });
+}
+
+async function fetchLatestRelease(repo) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (attempt) { await new Promise((res) => setTimeout(res, 400)); }
+    try { return await fetchLatestReleaseOnce(repo); } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
 }
 
 // ---------- registration ----------
@@ -1358,7 +1527,23 @@ export function apply(ctx) {
         recordInput: false,
         handler: (inv) => safe(handleVersion, ctx, inv),
       });
+      commands.register({
+        name: 'skills-panel-usage',
+        description: '读取/重置技能使用统计（usage.json；技能面板内部命令）',
+        input: { hint: 'JSON: {"reset": true}' },
+        recordInput: false,
+        handler: (inv) => safe(handleUsage, ctx, inv),
+      });
     };
+    // usage recorder: observe every session's events (global listener). Best-effort:
+    // if the hook is unavailable the panel simply shows no usage counts.
+    try {
+      if (typeof ctx.on === 'function') {
+        ctx.on('session/event', recordSessionEvent, { global: true });
+      }
+    } catch (eListen) {
+      console.warn('[' + NS + '] session/event listener unavailable:', eListen && eListen.message);
+    }
     if (typeof ctx.effect === 'function') {
       ctx.effect(registration);
     } else {
