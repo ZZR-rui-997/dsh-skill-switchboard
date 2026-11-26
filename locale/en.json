@@ -1,5 +1,5 @@
 {
-  "meta.title": "Skills workbench",
+  "meta.title": "Skill switchboard",
   "meta.description": "Manage the skills you own: enable or disable, full-text search, spec check with one-click fix, SKILL.md editor, create, import a folder or .zip, move between user/agents/project roots, tag, and delete into a restorable trash. Only your own skills are listed (bundled and plugin-provided skills stay out). The switch writes SKILL.md frontmatter and the filesystem watcher reloads it — no restart.",
   "meta.detail": "docs/DETAIL.md",
   "panel": "Skills",

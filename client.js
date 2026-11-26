@@ -1,12 +1,12 @@
-// dsh-skills-workbench — client half (v2)
+// dsh-skill-switchboard — client half (v2)
 // Sidebar 「技能」 panel: user-owned skills only, single 已启用 toggle,
 // full-text search, spec check dots, SKILL.md editor modal, create/import/delete,
 // source grouping, refresh-on-focus. RPC via ctx.remote.commands (host commands).
 
 (function () {
-  const MOD_ID = 'dsh-skills-workbench';
+  const MOD_ID = 'dsh-skill-switchboard';
   const PANEL_ID = 'skills';
-  const NS = 'dsh-skills-workbench';
+  const NS = 'dsh-skill-switchboard';
 
   const stringsZh = {
     panel: '技能',

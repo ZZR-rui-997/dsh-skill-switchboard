@@ -1,6 +1,6 @@
-# dsh-skills-workbench
+# dsh-skill-switchboard
 
-A **Skills** workbench in the DSH web client's left sidebar: see the skills you own, turn them on
+A **skill switchboard** in the DSH web client's left sidebar: see the skills you own, turn them on
 or off, search inside them, check them against the SKILL.md spec, edit them, create new ones,
 import a folder or a `.zip`, move them between roots, tag them, and delete them into a trash you
 can restore from.

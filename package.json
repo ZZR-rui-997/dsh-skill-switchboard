@@ -1,8 +1,8 @@
 {
-  "name": "dsh-skills-workbench",
+  "name": "dsh-skill-switchboard",
   "version": "1.0.0",
   "type": "module",
-  "description": "Sidebar Skills workbench for the DSH web client: list your own skills, switch model/user invocation, search bodies, check and fix spec problems, edit SKILL.md, create, import (folder or .zip), move, tag, delete and restore.",
+  "description": "Sidebar skill switchboard for the DSH web client: list your own skills, switch model/user invocation, search bodies, check and fix spec problems, edit SKILL.md, create, import (folder or .zip), move, tag, delete and restore.",
   "engines": {
     "dsh": ">=0.2.2-rc.1",
     "node": ">=22"
@@ -60,13 +60,13 @@
     "skill-manager",
     "sidebar"
   ],
-  "homepage": "https://github.com/ZZR-rui-997/dsh-skills-workbench#readme",
+  "homepage": "https://github.com/ZZR-rui-997/dsh-skill-switchboard#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZZR-rui-997/dsh-skills-workbench.git"
+    "url": "git+https://github.com/ZZR-rui-997/dsh-skill-switchboard.git"
   },
   "bugs": {
-    "url": "https://github.com/ZZR-rui-997/dsh-skills-workbench/issues"
+    "url": "https://github.com/ZZR-rui-997/dsh-skill-switchboard/issues"
   },
   "scripts": {
     "check": "node --check index.js && node --check client.js",

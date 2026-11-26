@@ -99,6 +99,6 @@
   <!-- footer labels -->
   <g font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="9" fill="#8fa1bf">
     <text x="32" y="288">check · fix · edit · create · import (.zip) · move · tag · trash</text>
-    <text x="608" y="288" text-anchor="end">dsh-skills-workbench</text>
+    <text x="608" y="288" text-anchor="end">dsh-skill-switchboard</text>
   </g>
 </svg>

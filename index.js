@@ -1,4 +1,4 @@
-// dsh-skills-workbench — host half (v2)
+// dsh-skill-switchboard — host half (v2)
 // Internal commands (all recordInput:false, never enter model context):
 //   /skills-panel-list    {cwd?}              → user-owned skill catalog (incl. disabled) + body text for full-text search
 //   /skills-panel-set     {path,field,value}  → rewrite frontmatter flags (enabled|model|user)
@@ -19,7 +19,7 @@ import { inflateRawSync } from 'node:zlib';
 import { homedir, tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 
-const NS = 'dsh-skills-workbench';
+const NS = 'dsh-skill-switchboard';
 
 // field 'model' controls disable-model-invocation (inverted); field 'user' controls user-invocable.
 const FIELD_KEY = { model: 'disable-model-invocation', user: 'user-invocable' };

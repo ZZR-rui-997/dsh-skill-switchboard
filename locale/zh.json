@@ -1,5 +1,5 @@
 {
-  "meta.title": "技能面板",
+  "meta.title": "技能开关台",
   "meta.description": "把自己的技能管起来：开关启用、全文搜索、按规范检查并一键修复、编辑 SKILL.md、新建、文件夹或 .zip 导入、在用户/通用/项目之间移动、打标签、删除进回收站可恢复。只列出你自己装的技能（系统自带与插件技能不在此列）。开关写回 SKILL.md 的 frontmatter，文件监听会自动重载，无需重启。",
   "meta.detail": "docs/DETAIL.zh.md",
   "panel": "技能",
