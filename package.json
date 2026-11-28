@@ -1,6 +1,6 @@
 {
   "name": "dsh-skill-switchboard",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "Sidebar skill switchboard for the DSH web client: list your own skills, switch model/user invocation, search bodies, check and fix spec problems, edit SKILL.md, create, import (folder or .zip), move, tag, delete and restore.",
   "engines": {

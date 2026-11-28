@@ -88,8 +88,12 @@ function loadUsage() {
     // Normalize entries: a hand-edited usage.json with primitive values must not
     // poison touchUsage (`cur.count += 1` on a primitive throws in strict ESM and
     // the catch would silently stop counting that skill forever).
+    // Also strip mangled keys: pre-1.0.2 hosts recorded the raw JSON-string
+    // arguments ('{"name":"office"}') as a key when event.data.arguments arrived
+    // stringified on the wire. Any window that reloads/restarts self-heals.
     for (const key of ['skills', 'tools']) {
       for (const name of Object.keys(usageMem[key])) {
+        if (key === 'skills' && name.startsWith('{')) { delete usageMem[key][name]; continue; }
         const e = usageMem[key][name];
         if (!e || typeof e !== 'object' || Array.isArray(e) || typeof e.count !== 'number' || !Number.isFinite(e.count)) {
           usageMem[key][name] = { count: 0, lastUsed: (e && typeof e === 'object' && typeof e.lastUsed === 'string') ? e.lastUsed : undefined };
@@ -140,11 +144,31 @@ function recordSessionEvent(session, event) {
     if (event.type === 'user/message') {
       const src = event.data && event.data.source;
       if (src && src.kind === 'skill-invocation' && typeof src.name === 'string' && src.name) {
+        // 手动路径：用户在输入框打 /skill-name 手势 → dsh-tool-skill 在 agent/pre-step 注入
+        // 带 source.kind='skill-invocation' 的 user/message（只在手势路径产生）。
         touchUsage('skills', src.name);
       }
     } else if (event.type === 'tool/call') {
       const name = event.data && event.data.name;
-      if (typeof name === 'string' && name) touchUsage('tools', name);
+      if (typeof name === 'string' && name) {
+        touchUsage('tools', name);
+        // 模型路径：模型调 skill 工具加载技能 → tool/call {name:'skill', arguments:{name}}
+        // （实测 gestures 不产生 skill-invocation user/message，模型加载只走工具路径）
+        if (name === 'skill') {
+          // 实测真机事件：arguments 是 JSON 字符串 '{"name":"office"}'（wire 序列化所致），
+          // 兼容三种形态：字符串JSON / 对象 / 纯字符串技能名
+          const arg = event.data.arguments;
+          let skillName = arg;
+          if (typeof arg === 'string') {
+            if (arg.startsWith('{')) { try { skillName = JSON.parse(arg).name; } catch { skillName = arg; } }
+          } else if (arg && typeof arg === 'object') {
+            skillName = arg.name;
+          }
+          if (typeof skillName === 'string' && skillName && !skillName.startsWith('{')) {
+            touchUsage('skills', skillName);
+          }
+        }
+      }
     }
   } catch { /* never break the session event flow */ }
 }
